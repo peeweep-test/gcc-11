@@ -1,0 +1,47 @@
+--- a/src/gcc/config/rs6000/rs6000-call.c
++++ b/src/gcc/config/rs6000/rs6000-call.c
+@@ -8918,7 +8918,7 @@ def_builtin (const char *name, tree type
+ 
+   if (rs6000_builtin_decls[(int)code])
+     fatal_error (input_location,
+-		 "internal error: builtin function %qs already processed",
++		 "internal error: built-in function %qs already processed",
+ 		 name);
+ 
+   rs6000_builtin_decls[(int)code] = t =
+@@ -11416,7 +11416,7 @@ altivec_expand_builtin (tree exp, rtx ta
+ 	{
+ 	  size_t uns_fcode = (size_t) fcode;
+ 	  const char *name = rs6000_builtin_info[uns_fcode].name;
+-	  error ("Second argument of %qs must be in the range [0, 3].", name);
++	  error ("second argument of %qs must be in the range [0, 3]", name);
+ 	  return expand_call (exp, target, false);
+ 	}
+       break;
+@@ -11676,7 +11676,7 @@ rs6000_invalid_builtin (enum rs6000_buil
+   else if ((fnmask & RS6000_BTM_HARD_FLOAT) != 0)
+     error ("%qs requires the %qs option", name, "-mhard-float");
+   else if ((fnmask & RS6000_BTM_FLOAT128_HW) != 0)
+-    error ("%qs requires ISA 3.0 IEEE 128-bit floating point", name);
++    error ("%qs requires ISA 3.0 IEEE 128-bit floating-point", name);
+   else if ((fnmask & RS6000_BTM_FLOAT128) != 0)
+     error ("%qs requires the %qs option", name, "%<-mfloat128%>");
+   else if ((fnmask & (RS6000_BTM_POPCNTD | RS6000_BTM_POWERPC64))
+@@ -14878,7 +14878,7 @@ builtin_function_type (machine_mode mode
+ 
+   if (!ret_type)
+     fatal_error (input_location,
+-		 "internal error: builtin function %qs had an unexpected "
++		 "internal error: built-in function %qs had an unexpected "
+ 		 "return type %qs", name, GET_MODE_NAME (h.mode[0]));
+ 
+   for (i = 0; i < (int) ARRAY_SIZE (arg_type); i++)
+@@ -14900,7 +14900,7 @@ builtin_function_type (machine_mode mode
+ 
+       if (!arg_type[i])
+ 	fatal_error (input_location,
+-		     "internal error: builtin function %qs, argument %d "
++		     "internal error: built-in function %qs, argument %d "
+ 		     "had unexpected argument type %qs", name, i,
+ 		     GET_MODE_NAME (m));
+     }

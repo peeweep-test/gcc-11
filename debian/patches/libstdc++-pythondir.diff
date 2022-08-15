@@ -1,0 +1,22 @@
+--- a/src/libstdc++-v3/python/Makefile.am
++++ b/src/libstdc++-v3/python/Makefile.am
+@@ -26,7 +26,7 @@ include $(top_srcdir)/fragment.am
+ if ENABLE_PYTHONDIR
+ pythondir = $(prefix)/$(python_mod_dir)
+ else
+-pythondir = $(datadir)/gcc-$(gcc_version)/python
++pythondir = $(datadir)/gcc/python
+ endif
+ 
+ all-local: gdb.py
+--- a/src/libstdc++-v3/python/Makefile.in
++++ b/src/libstdc++-v3/python/Makefile.in
+@@ -401,7 +401,7 @@ WARN_CXXFLAGS = \
+ 
+ # -I/-D flags to pass when compiling.
+ AM_CPPFLAGS = $(GLIBCXX_INCLUDES) $(CPPFLAGS)
+-@ENABLE_PYTHONDIR_FALSE@pythondir = $(datadir)/gcc-$(gcc_version)/python
++@ENABLE_PYTHONDIR_FALSE@pythondir = $(datadir)/gcc/python
+ @ENABLE_PYTHONDIR_TRUE@pythondir = $(prefix)/$(python_mod_dir)
+ nobase_python_DATA = \
+     libstdcxx/v6/printers.py \

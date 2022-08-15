@@ -1,0 +1,2189 @@
+--- a/src/configure.ac
++++ b/src/configure.ac
+@@ -163,6 +163,7 @@ target_libraries="target-libgcc \
+ 		target-libffi \
+ 		target-libobjc \
+ 		target-libada \
++		target-libgm2 \
+ 		target-libgo \
+ 		target-libphobos \
+ 		target-zlib"
+@@ -452,6 +453,12 @@ if test "${ENABLE_LIBADA}" != "yes" ; th
+   noconfigdirs="$noconfigdirs gnattools"
+ fi
+ 
++AC_ARG_ENABLE(libgm2,
++[AS_HELP_STRING([--enable-libgm2], [build libgm2 directory])],
++ENABLE_LIBGM2=$enableval,
++ENABLE_LIBGM2=yes)
++
++
+ AC_ARG_ENABLE(libssp,
+ [AS_HELP_STRING([--enable-libssp], [build libssp directory])],
+ ENABLE_LIBSSP=$enableval,
+@@ -3504,6 +3511,7 @@ NCN_STRICT_CHECK_TARGET_TOOLS(GCC_FOR_TA
+ NCN_STRICT_CHECK_TARGET_TOOLS(GFORTRAN_FOR_TARGET, gfortran)
+ NCN_STRICT_CHECK_TARGET_TOOLS(GOC_FOR_TARGET, gccgo)
+ NCN_STRICT_CHECK_TARGET_TOOLS(GDC_FOR_TARGET, gdc)
++NCN_STRICT_CHECK_TARGET_TOOLS(GM2_FOR_TARGET, gm2)
+ 
+ ACX_CHECK_INSTALLED_TARGET_TOOL(AR_FOR_TARGET, ar)
+ ACX_CHECK_INSTALLED_TARGET_TOOL(AS_FOR_TARGET, as)
+@@ -3540,6 +3548,8 @@ GCC_TARGET_TOOL(gccgo, GOC_FOR_TARGET, G
+ 		[gcc/gccgo -B$$r/$(HOST_SUBDIR)/gcc/], go)
+ GCC_TARGET_TOOL(gdc, GDC_FOR_TARGET, GDC,
+ 		[gcc/gdc -B$$r/$(HOST_SUBDIR)/gcc/], d)
++GCC_TARGET_TOOL(gm2, GM2_FOR_TARGET, GM2,
++		[gcc/gm2 -B$$r/$(HOST_SUBDIR)/gcc/], m2)
+ GCC_TARGET_TOOL(ld, LD_FOR_TARGET, LD, [ld/ld-new])
+ GCC_TARGET_TOOL(lipo, LIPO_FOR_TARGET, LIPO)
+ GCC_TARGET_TOOL(nm, NM_FOR_TARGET, NM, [binutils/nm-new])
+@@ -3666,6 +3676,8 @@ AC_SUBST(stage2_werror_flag)
+ # Specify what files to not compare during bootstrap.
+ 
+ compare_exclusions="gcc/cc*-checksum\$(objext) | gcc/ada/*tools/*"
++compare_exclusions="$compare_exclusions | gcc/m2/gm2-compiler-boot/M2Version*"
++compare_exclusions="$compare_exclusions | gcc/m2/gm2-compiler-boot/SYSTEM*"
+ case "$target" in
+   hppa*64*-*-hpux*) ;;
+   hppa*-*-hpux*) compare_exclusions="$compare_exclusions | */libgcc/lib2funcs* | gcc/function-tests.o" ;;
+--- a/src/gcc/c/gccspec.c
++++ b/src/gcc/c/gccspec.c
+@@ -105,3 +105,9 @@ lang_specific_pre_link (void)
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ int lang_specific_extra_outfiles = 0;  /* Not used for C.  */
++
++/* lang_register_spec_functions.  Not used for C.  */
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/c-family/cppspec.c
++++ b/src/gcc/c-family/cppspec.c
+@@ -198,3 +198,9 @@ int lang_specific_pre_link (void)
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ int lang_specific_extra_outfiles = 0;  /* Not used for cpp.  */
++
++/* lang_register_spec_functions.  Not used for cpp.  */
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/cp/g++spec.c
++++ b/src/gcc/cp/g++spec.c
+@@ -434,3 +434,9 @@ int lang_specific_pre_link (void)  /* No
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ int lang_specific_extra_outfiles = 0;  /* Not used for C++.  */
++
++/* lang_register_spec_functions.  Not used for C++.  */
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/gcc.c
++++ b/src/gcc/gcc.c
+@@ -333,6 +333,10 @@ static const char *cross_compile = "1";
+ static const char *cross_compile = "0";
+ #endif
+ 
++/* The lang specs might wish to override the default linker.
++ */
++int allow_linker = 1;
++
+ /* Greatest exit code of sub-processes that has been encountered up to
+    now.  */
+ static int greatest_status = 1;
+@@ -361,7 +365,6 @@ static void set_spec (const char *, cons
+ static struct compiler *lookup_compiler (const char *, size_t, const char *);
+ static char *build_search_list (const struct path_prefix *, const char *,
+ 				bool, bool);
+-static void xputenv (const char *);
+ static void putenv_from_prefixes (const struct path_prefix *, const char *,
+ 				  bool);
+ static int access_check (const char *, int);
+@@ -1238,6 +1241,7 @@ proper position among the other output f
+ /* We pass any -flto flags on to the linker, which is expected
+    to understand them.  In practice, this means it had better be collect2.  */
+ /* %{e*} includes -export-dynamic; see comment in common.opt.  */
++
+ #ifndef LINK_COMMAND_SPEC
+ #define LINK_COMMAND_SPEC "\
+ %{!fsyntax-only:%{!c:%{!M:%{!MM:%{!E:%{!S:\
+@@ -1874,6 +1878,10 @@ static const struct spec_function static
+   { 0, 0 }
+ };
+ 
++/* front end registered spec functions */
++static struct spec_function *lang_spec_functions = NULL;
++static unsigned int lang_spec_functions_length = 0;
++
+ static int processing_spec_function;
+ 
+ /* Add appropriate libgcc specs to OBSTACK, taking into account
+@@ -3037,12 +3045,20 @@ add_to_obstack (char *path, void *data)
+ 
+ /* Add or change the value of an environment variable, outputting the
+    change to standard error if in verbose mode.  */
+-static void
++void
+ xputenv (const char *string)
+ {
+   env.xput (string);
+ }
+ 
++/* Get the environment variable through the managed env.  */
++
++const char *
++xgetenv (const char *key)
++{
++  return env.get (key);
++}
++
+ /* Build a list of search directories from PATHS.
+    PREFIX is a string to prepend to the list.
+    If CHECK_DIR_P is true we ensure the directory exists.
+@@ -3989,7 +4005,7 @@ alloc_switch (void)
+ /* Save an option OPT with N_ARGS arguments in array ARGS, marking it
+    as validated if VALIDATED and KNOWN if it is an internal switch.  */
+ 
+-static void
++void
+ save_switch (const char *opt, size_t n_args, const char *const *args,
+ 	     bool validated, bool known)
+ {
+@@ -4034,6 +4050,66 @@ set_source_date_epoch_envvar ()
+   setenv ("SOURCE_DATE_EPOCH", source_date_epoch, 0);
+ }
+ 
++void
++fe_add_linker_option (const char *option)
++{
++  add_linker_option (option, strlen (option));
++}
++
++/* Handle the -B option by adding the prefix to exec, startfile and
++   include search paths.  */
++
++void
++handle_OPT_B (const char *arg)
++{
++  size_t len = strlen (arg);
++
++  /* Catch the case where the user has forgotten to append a
++     directory separator to the path.  Note, they may be using
++     -B to add an executable name prefix, eg "i386-elf-", in
++     order to distinguish between multiple installations of
++     GCC in the same directory.  Hence we must check to see
++     if appending a directory separator actually makes a
++     valid directory name.  */
++  if (!IS_DIR_SEPARATOR (arg[len - 1])
++      && is_directory (arg, false))
++    {
++      char *tmp = XNEWVEC (char, len + 2);
++      strcpy (tmp, arg);
++      tmp[len] = DIR_SEPARATOR;
++      tmp[++len] = 0;
++      arg = tmp;
++    }
++
++  add_prefix (&exec_prefixes, arg, NULL,
++	      PREFIX_PRIORITY_B_OPT, 0, 0);
++  add_prefix (&startfile_prefixes, arg, NULL,
++	      PREFIX_PRIORITY_B_OPT, 0, 0);
++  add_prefix (&include_prefixes, arg, NULL,
++	      PREFIX_PRIORITY_B_OPT, 0, 0);
++}
++
++/* Save the infile.  */
++
++void
++fe_add_infile (const char *infile, const char *lang)
++{
++  add_infile (infile, lang);
++}
++
++/* Mark a file as compiled.  */
++
++void
++fe_mark_compiled (const char *name)
++{
++  int max = n_infiles + lang_specific_extra_outfiles;
++  int i;
++
++  for (i = 0; i < max; i++)
++    if (filename_cmp (name, infiles[i].name) == 0)
++      infiles[i].compiled = true;
++}
++
+ /* Handle an option DECODED that is unknown to the option-processing
+    machinery.  */
+ 
+@@ -4535,33 +4611,7 @@ driver_handle_option (struct gcc_options
+       break;
+ 
+     case OPT_B:
+-      {
+-	size_t len = strlen (arg);
+-
+-	/* Catch the case where the user has forgotten to append a
+-	   directory separator to the path.  Note, they may be using
+-	   -B to add an executable name prefix, eg "i386-elf-", in
+-	   order to distinguish between multiple installations of
+-	   GCC in the same directory.  Hence we must check to see
+-	   if appending a directory separator actually makes a
+-	   valid directory name.  */
+-	if (!IS_DIR_SEPARATOR (arg[len - 1])
+-	    && is_directory (arg, false))
+-	  {
+-	    char *tmp = XNEWVEC (char, len + 2);
+-	    strcpy (tmp, arg);
+-	    tmp[len] = DIR_SEPARATOR;
+-	    tmp[++len] = 0;
+-	    arg = tmp;
+-	  }
+-
+-	add_prefix (&exec_prefixes, arg, NULL,
+-		    PREFIX_PRIORITY_B_OPT, 0, 0);
+-	add_prefix (&startfile_prefixes, arg, NULL,
+-		    PREFIX_PRIORITY_B_OPT, 0, 0);
+-	add_prefix (&include_prefixes, arg, NULL,
+-		    PREFIX_PRIORITY_B_OPT, 0, 0);
+-      }
++      handle_OPT_B (arg);
+       validated = true;
+       break;
+ 
+@@ -4684,6 +4734,68 @@ single_input_file_index ()
+   return ret;
+ }
+ 
++/* print_option a debugging routine to display option i with a leading desc
++   string.  */
++
++void
++print_option (const char *desc, unsigned int i,
++	      struct cl_decoded_option *in_decoded_options)
++{
++  printf (desc);
++  printf (" [%d]", i);
++  switch (in_decoded_options[i].opt_index)
++    {
++
++    case N_OPTS:
++      break;
++    case OPT_SPECIAL_unknown:
++      printf (" flag <unknown>");
++      break;
++    case OPT_SPECIAL_ignore:
++      printf (" flag <ignore>");
++      break;
++    case OPT_SPECIAL_program_name:
++      printf (" flag <program name>");
++      break;
++    case OPT_SPECIAL_input_file:
++      printf (" flag <input file name>");
++      break;
++    default:
++      printf (" flag [%s]",
++              cl_options[in_decoded_options[i].opt_index].opt_text);
++    }
++
++  if (in_decoded_options[i].arg == NULL)
++    printf (" no arg");
++  else
++    printf (" arg [%s]", in_decoded_options[i].arg);
++  printf (" orig text [%s]",
++          in_decoded_options[i].orig_option_with_args_text);
++  printf (" value [%ld]", in_decoded_options[i].value);
++  printf (" error [%d]\n", in_decoded_options[i].errors);
++}
++
++/* print_options display all options with a leading string desc.  */
++
++void
++print_options (const char *desc,
++	       unsigned int in_decoded_options_count,
++	       struct cl_decoded_option *in_decoded_options)
++{
++  for (unsigned int i = 0; i < in_decoded_options_count; i++)
++    print_option (desc, i, in_decoded_options);
++}
++
++/* dbg_options display all options.  */
++
++void
++dbg_options (unsigned int in_decoded_options_count,
++	     struct cl_decoded_option *in_decoded_options)
++{
++  print_options ("dbg_options", in_decoded_options_count,
++		 in_decoded_options);
++}
++
+ /* Create the vector `switches' and its contents.
+    Store its length in `n_switches'.  */
+ 
+@@ -6848,6 +6960,33 @@ do_spec_1 (const char *spec, int inswitc
+   return 0;
+ }
+ 
++/* Allow the front end to register a spec function.  */
++
++void fe_add_spec_function (const char *name, const char *(*func) (int, const char **))
++{
++  const struct spec_function *f = lookup_spec_function (name);
++  struct spec_function *fl;
++  unsigned int i;
++
++  if (f != NULL)
++    fatal_error (input_location, "spec function (%s) already registered", name);
++
++  if (lang_spec_functions == NULL)
++    lang_spec_functions_length = 1;
++
++  lang_spec_functions_length++;
++  fl = (struct spec_function *) xmalloc (sizeof (const struct spec_function)*lang_spec_functions_length);
++  for (i=0; i<lang_spec_functions_length-2; i++)
++    fl[i] = lang_spec_functions[i];
++  free (lang_spec_functions);
++  lang_spec_functions = fl;
++
++  lang_spec_functions[lang_spec_functions_length-2].name = name;
++  lang_spec_functions[lang_spec_functions_length-2].func = func;
++  lang_spec_functions[lang_spec_functions_length-1].name = NULL;
++  lang_spec_functions[lang_spec_functions_length-1].func = NULL;
++}
++
+ /* Look up a spec function.  */
+ 
+ static const struct spec_function *
+@@ -6859,6 +6998,11 @@ lookup_spec_function (const char *name)
+     if (strcmp (sf->name, name) == 0)
+       return sf;
+ 
++  if (lang_spec_functions != NULL)
++    for (sf = lang_spec_functions; sf->name != NULL; sf++)
++      if (strcmp (sf->name, name) == 0)
++	return sf;
++
+   return NULL;
+ }
+ 
+@@ -8345,6 +8489,8 @@ driver::set_up_specs () const
+ 			   accel_dir_suffix, dir_separator_str, NULL);
+   just_machine_suffix = concat (spec_machine, dir_separator_str, NULL);
+ 
++  lang_register_spec_functions ();
++
+   specs_file = find_a_file (&startfile_prefixes, "specs", R_OK, true);
+   /* Read the specs file unless it is a default one.  */
+   if (specs_file != 0 && strcmp (specs_file, "specs"))
+@@ -9075,7 +9221,8 @@ driver::maybe_run_linker (const char *ar
+ 
+   /* Run ld to link all the compiler output files.  */
+ 
+-  if (num_linker_inputs > 0 && !seen_error () && print_subprocess_help < 2)
++  if (num_linker_inputs > 0 && !seen_error () && print_subprocess_help < 2
++      && allow_linker)
+     {
+       int tmp = execution_count;
+ 
+@@ -9144,7 +9291,7 @@ driver::maybe_run_linker (const char *ar
+   /* If options said don't run linker,
+      complain about input files to be given to the linker.  */
+ 
+-  if (! linker_was_run && !seen_error ())
++  if (! linker_was_run && !seen_error () && allow_linker)
+     for (i = 0; (int) i < n_infiles; i++)
+       if (explicit_link_files[i]
+ 	  && !(infiles[i].language && infiles[i].language[0] == '*'))
+--- a/src/gcc/gcc.h
++++ b/src/gcc/gcc.h
+@@ -73,9 +73,28 @@ struct spec_function
+ extern int do_spec (const char *);
+ extern void record_temp_file (const char *, int, int);
+ extern void set_input (const char *);
++extern void save_switch (const char *opt, size_t n_args,
++			 const char *const *args,
++			 bool validated, bool known);
++extern void handle_OPT_B (const char *arg);
++extern void fe_add_infile (const char *infile, const char *lang);
++extern void fe_add_linker_option (const char *option);
++extern void fe_add_spec_function (const char *name, const char *(*func) (int, const char **));
++extern void xputenv (const char *value);
++extern const char *xgetenv (const char *key);
++extern void print_options (const char *desc,
++			   unsigned int in_decoded_options_count,
++			   struct cl_decoded_option *in_decoded_options);
++extern void print_option (const char *desc, unsigned int i,
++			  struct cl_decoded_option *in_decoded_options);
++extern void dbg_options (unsigned int in_decoded_options_count,
++			 struct cl_decoded_option *in_decoded_options);
++
+ 
+ /* Spec files linked with gcc.c must provide definitions for these.  */
+ 
++extern void lang_register_spec_functions (void);
++
+ /* Called before processing to change/add/remove arguments.  */
+ extern void lang_specific_driver (struct cl_decoded_option **,
+ 				  unsigned int *, int *);
+@@ -97,4 +116,8 @@ driver_get_configure_time_options (void
+ 					      void *user_data),
+ 				   void *user_data);
+ 
++/* Default setting is true, but can be overridden by the language
++   front end to prohibit the linker from being invoked.  */
++extern int allow_linker;
++
+ #endif /* ! GCC_GCC_H */
+--- a/src/Makefile.def
++++ b/src/Makefile.def
+@@ -180,6 +180,7 @@ target_modules = { module= libffi; no_in
+ target_modules = { module= zlib; };
+ target_modules = { module= rda; };
+ target_modules = { module= libada; };
++target_modules = { module= libgm2; lib_path=.libs; };
+ target_modules = { module= libgomp; bootstrap= true; lib_path=.libs; };
+ target_modules = { module= libitm; lib_path=.libs; };
+ target_modules = { module= libatomic; lib_path=.libs; };
+@@ -298,6 +299,8 @@ flags_to_pass = { flag= GOC_FOR_TARGET ;
+ flags_to_pass = { flag= GOCFLAGS_FOR_TARGET ; };
+ flags_to_pass = { flag= GDC_FOR_TARGET ; };
+ flags_to_pass = { flag= GDCFLAGS_FOR_TARGET ; };
++flags_to_pass = { flag= GM2_FOR_TARGET ; };
++flags_to_pass = { flag= GM2FLAGS_FOR_TARGET ; };
+ flags_to_pass = { flag= LD_FOR_TARGET ; };
+ flags_to_pass = { flag= LIPO_FOR_TARGET ; };
+ flags_to_pass = { flag= LDFLAGS_FOR_TARGET ; };
+@@ -651,6 +654,7 @@ languages = { language=obj-c++;	gcc-chec
+ languages = { language=go;	gcc-check-target=check-go;
+ 				lib-check-target=check-target-libgo;
+ 				lib-check-target=check-gotools; };
++languages = { language=m2;	gcc-check-target=check-m2; };
+ languages = { language=brig;	gcc-check-target=check-brig;
+ 				lib-check-target=check-target-libhsail-rt; };
+ languages = { language=d;	gcc-check-target=check-d;
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -158,6 +158,7 @@ BUILD_EXPORTS = \
+ 	GOCFLAGS="$(GOCFLAGS_FOR_BUILD)"; export GOCFLAGS; \
+ 	GDC="$(GDC_FOR_BUILD)"; export GDC; \
+ 	GDCFLAGS="$(GDCFLAGS_FOR_BUILD)"; export GDCFLAGS; \
++	GM2="$(GM2_FOR_BUILD)"; export GM2; \
+ 	DLLTOOL="$(DLLTOOL_FOR_BUILD)"; export DLLTOOL; \
+ 	LD="$(LD_FOR_BUILD)"; export LD; \
+ 	LDFLAGS="$(LDFLAGS_FOR_BUILD)"; export LDFLAGS; \
+@@ -195,6 +196,7 @@ HOST_EXPORTS = \
+ 	GFORTRAN="$(GFORTRAN)"; export GFORTRAN; \
+ 	GOC="$(GOC)"; export GOC; \
+ 	GDC="$(GDC)"; export GDC; \
++	GM2="$(GM2)"; export GM2; \
+ 	AR="$(AR)"; export AR; \
+ 	AS="$(AS)"; export AS; \
+ 	CC_FOR_BUILD="$(CC_FOR_BUILD)"; export CC_FOR_BUILD; \
+@@ -293,6 +295,7 @@ BASE_TARGET_EXPORTS = \
+ 	GFORTRAN="$(GFORTRAN_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GFORTRAN; \
+ 	GOC="$(GOC_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GOC; \
+ 	GDC="$(GDC_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GDC; \
++	GM2="$(GM2_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GM2; \
+ 	DLLTOOL="$(DLLTOOL_FOR_TARGET)"; export DLLTOOL; \
+ 	LD="$(COMPILER_LD_FOR_TARGET)"; export LD; \
+ 	LDFLAGS="$(LDFLAGS_FOR_TARGET)"; export LDFLAGS; \
+@@ -359,6 +362,7 @@ DLLTOOL_FOR_BUILD = @DLLTOOL_FOR_BUILD@
+ GFORTRAN_FOR_BUILD = @GFORTRAN_FOR_BUILD@
+ GOC_FOR_BUILD = @GOC_FOR_BUILD@
+ GDC_FOR_BUILD = @GDC_FOR_BUILD@
++GM2_FOR_BUILD = @GM2_FOR_BUILD@
+ LDFLAGS_FOR_BUILD = @LDFLAGS_FOR_BUILD@
+ LD_FOR_BUILD = @LD_FOR_BUILD@
+ NM_FOR_BUILD = @NM_FOR_BUILD@
+@@ -428,6 +432,7 @@ CXXFLAGS = @CXXFLAGS@
+ LIBCXXFLAGS = $(CXXFLAGS) -fno-implicit-templates
+ GOCFLAGS = $(CFLAGS)
+ GDCFLAGS = $(CFLAGS)
++GM2FLAGS = $(CFLAGS)
+ 
+ CREATE_GCOV = create_gcov
+ 
+@@ -565,7 +570,7 @@ STAGEprofile_TFLAGS = $(STAGE2_TFLAGS)
+ STAGEtrain_CFLAGS = $(filter-out -fchecking=1,$(STAGE3_CFLAGS))
+ STAGEtrain_TFLAGS = $(filter-out -fchecking=1,$(STAGE3_TFLAGS))
+ 
+-STAGEfeedback_CFLAGS = $(STAGE4_CFLAGS) -fprofile-use -fprofile-reproducible=parallel-runs
++STAGEfeedback_CFLAGS = $(STAGE4_CFLAGS) -fprofile-use
+ STAGEfeedback_TFLAGS = $(STAGE4_TFLAGS)
+ 
+ STAGEautoprofile_CFLAGS = $(STAGE2_CFLAGS) -g
+@@ -595,6 +600,7 @@ RAW_CXX_FOR_TARGET=$(STAGE_CC_WRAPPER) @
+ GFORTRAN_FOR_TARGET=$(STAGE_CC_WRAPPER) @GFORTRAN_FOR_TARGET@
+ GOC_FOR_TARGET=$(STAGE_CC_WRAPPER) @GOC_FOR_TARGET@
+ GDC_FOR_TARGET=$(STAGE_CC_WRAPPER) @GDC_FOR_TARGET@
++GM2_FOR_TARGET=$(STAGE_CC_WRAPPER) @GM2_FOR_TARGET@
+ DLLTOOL_FOR_TARGET=@DLLTOOL_FOR_TARGET@
+ LD_FOR_TARGET=@LD_FOR_TARGET@
+ 
+@@ -645,7 +651,7 @@ all:
+ 
+ # This is the list of directories that may be needed in RPATH_ENVVAR
+ # so that programs built for the target machine work.
+-TARGET_LIB_PATH = $(TARGET_LIB_PATH_libstdc++-v3)$(TARGET_LIB_PATH_libsanitizer)$(TARGET_LIB_PATH_libvtv)$(TARGET_LIB_PATH_liboffloadmic)$(TARGET_LIB_PATH_libssp)$(TARGET_LIB_PATH_libphobos)$(TARGET_LIB_PATH_libgomp)$(TARGET_LIB_PATH_libitm)$(TARGET_LIB_PATH_libatomic)$(HOST_LIB_PATH_gcc)
++TARGET_LIB_PATH = $(TARGET_LIB_PATH_libstdc++-v3)$(TARGET_LIB_PATH_libsanitizer)$(TARGET_LIB_PATH_libvtv)$(TARGET_LIB_PATH_liboffloadmic)$(TARGET_LIB_PATH_libssp)$(TARGET_LIB_PATH_libphobos)$(TARGET_LIB_PATH_libgm2)$(TARGET_LIB_PATH_libgomp)$(TARGET_LIB_PATH_libitm)$(TARGET_LIB_PATH_libatomic)$(HOST_LIB_PATH_gcc)
+ 
+ @if target-libstdc++-v3
+ TARGET_LIB_PATH_libstdc++-v3 = $$r/$(TARGET_SUBDIR)/libstdc++-v3/src/.libs:
+@@ -671,6 +677,10 @@ TARGET_LIB_PATH_libssp = $$r/$(TARGET_SU
+ TARGET_LIB_PATH_libphobos = $$r/$(TARGET_SUBDIR)/libphobos/src/.libs:
+ @endif target-libphobos
+ 
++@if target-libgm2
++TARGET_LIB_PATH_libgm2 = $$r/$(TARGET_SUBDIR)/libgm2/.libs:
++@endif target-libgm2
++
+ @if target-libgomp
+ TARGET_LIB_PATH_libgomp = $$r/$(TARGET_SUBDIR)/libgomp/.libs:
+ @endif target-libgomp
+@@ -820,6 +830,8 @@ BASE_FLAGS_TO_PASS = \
+ 	"GOCFLAGS_FOR_TARGET=$(GOCFLAGS_FOR_TARGET)" \
+ 	"GDC_FOR_TARGET=$(GDC_FOR_TARGET)" \
+ 	"GDCFLAGS_FOR_TARGET=$(GDCFLAGS_FOR_TARGET)" \
++	"GM2_FOR_TARGET=$(GM2_FOR_TARGET)" \
++	"GM2FLAGS_FOR_TARGET=$(GM2FLAGS_FOR_TARGET)" \
+ 	"LD_FOR_TARGET=$(LD_FOR_TARGET)" \
+ 	"LIPO_FOR_TARGET=$(LIPO_FOR_TARGET)" \
+ 	"LDFLAGS_FOR_TARGET=$(LDFLAGS_FOR_TARGET)" \
+@@ -892,6 +904,7 @@ EXTRA_HOST_FLAGS = \
+ 	'GFORTRAN=$(GFORTRAN)' \
+ 	'GOC=$(GOC)' \
+ 	'GDC=$(GDC)' \
++	'GM2=$(GM2)' \
+ 	'LD=$(LD)' \
+ 	'LIPO=$(LIPO)' \
+ 	'NM=$(NM)' \
+@@ -918,6 +931,7 @@ POSTSTAGE1_FLAGS_TO_PASS = \
+ 	CC="$${CC}" CC_FOR_BUILD="$${CC_FOR_BUILD}" \
+ 	CXX="$${CXX}" CXX_FOR_BUILD="$${CXX_FOR_BUILD}" \
+ 	GDC="$${GDC}" GDC_FOR_BUILD="$${GDC_FOR_BUILD}" \
++	GM2="$${GM2}" GM2_FOR_BUILD="$${GM2_FOR_BUILD}" \
+ 	GNATBIND="$${GNATBIND}" \
+ 	LDFLAGS="$${LDFLAGS}" \
+ 	HOST_LIBS="$${HOST_LIBS}" \
+@@ -952,6 +966,8 @@ EXTRA_TARGET_FLAGS = \
+ 	'GOCFLAGS=$$(GOCFLAGS_FOR_TARGET)' \
+ 	'GDC=$$(GDC_FOR_TARGET) $$(XGCC_FLAGS_FOR_TARGET) $$(TFLAGS)' \
+ 	'GDCFLAGS=$$(GDCFLAGS_FOR_TARGET)' \
++	'GM2=$$(GM2_FOR_TARGET) $$(XGCC_FLAGS_FOR_TARGET) $$(TFLAGS)' \
++	'GM2FLAGS=$$(GM2FLAGS_FOR_TARGET)' \
+ 	'LD=$(COMPILER_LD_FOR_TARGET)' \
+ 	'LDFLAGS=$$(LDFLAGS_FOR_TARGET)' \
+ 	'LIBCFLAGS=$$(LIBCFLAGS_FOR_TARGET)' \
+@@ -978,6 +994,7 @@ TARGET_FLAGS_TO_PASS = $(BASE_FLAGS_TO_P
+ # cross-building scheme.
+ EXTRA_GCC_FLAGS = \
+ 	"GCC_FOR_TARGET=$(GCC_FOR_TARGET)" \
++	"GM2_FOR_TARGET=$(GM2_FOR_TARGET)" \
+ 	"`echo 'STMP_FIXPROTO=$(STMP_FIXPROTO)' | sed -e s'/[^=][^=]*=$$/XFOO=/'`" \
+ 	"`echo 'LIMITS_H_TEST=$(LIMITS_H_TEST)' | sed -e s'/[^=][^=]*=$$/XFOO=/'`"
+ 
+@@ -1067,6 +1084,7 @@ configure-target:  \
+     maybe-configure-target-zlib \
+     maybe-configure-target-rda \
+     maybe-configure-target-libada \
++    maybe-configure-target-libgm2 \
+     maybe-configure-target-libgomp \
+     maybe-configure-target-libitm \
+     maybe-configure-target-libatomic
+@@ -1240,6 +1258,7 @@ all-target: maybe-all-target-libffi
+ all-target: maybe-all-target-zlib
+ all-target: maybe-all-target-rda
+ all-target: maybe-all-target-libada
++all-target: maybe-all-target-libgm2
+ @if target-libgomp-no-bootstrap
+ all-target: maybe-all-target-libgomp
+ @endif target-libgomp-no-bootstrap
+@@ -1338,6 +1357,7 @@ info-target: maybe-info-target-libffi
+ info-target: maybe-info-target-zlib
+ info-target: maybe-info-target-rda
+ info-target: maybe-info-target-libada
++info-target: maybe-info-target-libgm2
+ info-target: maybe-info-target-libgomp
+ info-target: maybe-info-target-libitm
+ info-target: maybe-info-target-libatomic
+@@ -1429,6 +1449,7 @@ dvi-target: maybe-dvi-target-libffi
+ dvi-target: maybe-dvi-target-zlib
+ dvi-target: maybe-dvi-target-rda
+ dvi-target: maybe-dvi-target-libada
++dvi-target: maybe-dvi-target-libgm2
+ dvi-target: maybe-dvi-target-libgomp
+ dvi-target: maybe-dvi-target-libitm
+ dvi-target: maybe-dvi-target-libatomic
+@@ -1520,6 +1541,7 @@ pdf-target: maybe-pdf-target-libffi
+ pdf-target: maybe-pdf-target-zlib
+ pdf-target: maybe-pdf-target-rda
+ pdf-target: maybe-pdf-target-libada
++pdf-target: maybe-pdf-target-libgm2
+ pdf-target: maybe-pdf-target-libgomp
+ pdf-target: maybe-pdf-target-libitm
+ pdf-target: maybe-pdf-target-libatomic
+@@ -1611,6 +1633,7 @@ html-target: maybe-html-target-libffi
+ html-target: maybe-html-target-zlib
+ html-target: maybe-html-target-rda
+ html-target: maybe-html-target-libada
++html-target: maybe-html-target-libgm2
+ html-target: maybe-html-target-libgomp
+ html-target: maybe-html-target-libitm
+ html-target: maybe-html-target-libatomic
+@@ -1702,6 +1725,7 @@ TAGS-target: maybe-TAGS-target-libffi
+ TAGS-target: maybe-TAGS-target-zlib
+ TAGS-target: maybe-TAGS-target-rda
+ TAGS-target: maybe-TAGS-target-libada
++TAGS-target: maybe-TAGS-target-libgm2
+ TAGS-target: maybe-TAGS-target-libgomp
+ TAGS-target: maybe-TAGS-target-libitm
+ TAGS-target: maybe-TAGS-target-libatomic
+@@ -1793,6 +1817,7 @@ install-info-target: maybe-install-info-
+ install-info-target: maybe-install-info-target-zlib
+ install-info-target: maybe-install-info-target-rda
+ install-info-target: maybe-install-info-target-libada
++install-info-target: maybe-install-info-target-libgm2
+ install-info-target: maybe-install-info-target-libgomp
+ install-info-target: maybe-install-info-target-libitm
+ install-info-target: maybe-install-info-target-libatomic
+@@ -1884,6 +1909,7 @@ install-pdf-target: maybe-install-pdf-ta
+ install-pdf-target: maybe-install-pdf-target-zlib
+ install-pdf-target: maybe-install-pdf-target-rda
+ install-pdf-target: maybe-install-pdf-target-libada
++install-pdf-target: maybe-install-pdf-target-libgm2
+ install-pdf-target: maybe-install-pdf-target-libgomp
+ install-pdf-target: maybe-install-pdf-target-libitm
+ install-pdf-target: maybe-install-pdf-target-libatomic
+@@ -1975,6 +2001,7 @@ install-html-target: maybe-install-html-
+ install-html-target: maybe-install-html-target-zlib
+ install-html-target: maybe-install-html-target-rda
+ install-html-target: maybe-install-html-target-libada
++install-html-target: maybe-install-html-target-libgm2
+ install-html-target: maybe-install-html-target-libgomp
+ install-html-target: maybe-install-html-target-libitm
+ install-html-target: maybe-install-html-target-libatomic
+@@ -2066,6 +2093,7 @@ installcheck-target: maybe-installcheck-
+ installcheck-target: maybe-installcheck-target-zlib
+ installcheck-target: maybe-installcheck-target-rda
+ installcheck-target: maybe-installcheck-target-libada
++installcheck-target: maybe-installcheck-target-libgm2
+ installcheck-target: maybe-installcheck-target-libgomp
+ installcheck-target: maybe-installcheck-target-libitm
+ installcheck-target: maybe-installcheck-target-libatomic
+@@ -2157,6 +2185,7 @@ mostlyclean-target: maybe-mostlyclean-ta
+ mostlyclean-target: maybe-mostlyclean-target-zlib
+ mostlyclean-target: maybe-mostlyclean-target-rda
+ mostlyclean-target: maybe-mostlyclean-target-libada
++mostlyclean-target: maybe-mostlyclean-target-libgm2
+ mostlyclean-target: maybe-mostlyclean-target-libgomp
+ mostlyclean-target: maybe-mostlyclean-target-libitm
+ mostlyclean-target: maybe-mostlyclean-target-libatomic
+@@ -2248,6 +2277,7 @@ clean-target: maybe-clean-target-libffi
+ clean-target: maybe-clean-target-zlib
+ clean-target: maybe-clean-target-rda
+ clean-target: maybe-clean-target-libada
++clean-target: maybe-clean-target-libgm2
+ clean-target: maybe-clean-target-libgomp
+ clean-target: maybe-clean-target-libitm
+ clean-target: maybe-clean-target-libatomic
+@@ -2339,6 +2369,7 @@ distclean-target: maybe-distclean-target
+ distclean-target: maybe-distclean-target-zlib
+ distclean-target: maybe-distclean-target-rda
+ distclean-target: maybe-distclean-target-libada
++distclean-target: maybe-distclean-target-libgm2
+ distclean-target: maybe-distclean-target-libgomp
+ distclean-target: maybe-distclean-target-libitm
+ distclean-target: maybe-distclean-target-libatomic
+@@ -2430,6 +2461,7 @@ maintainer-clean-target: maybe-maintaine
+ maintainer-clean-target: maybe-maintainer-clean-target-zlib
+ maintainer-clean-target: maybe-maintainer-clean-target-rda
+ maintainer-clean-target: maybe-maintainer-clean-target-libada
++maintainer-clean-target: maybe-maintainer-clean-target-libgm2
+ maintainer-clean-target: maybe-maintainer-clean-target-libgomp
+ maintainer-clean-target: maybe-maintainer-clean-target-libitm
+ maintainer-clean-target: maybe-maintainer-clean-target-libatomic
+@@ -2577,6 +2609,7 @@ check-target:  \
+     maybe-check-target-zlib \
+     maybe-check-target-rda \
+     maybe-check-target-libada \
++    maybe-check-target-libgm2 \
+     maybe-check-target-libgomp \
+     maybe-check-target-libitm \
+     maybe-check-target-libatomic
+@@ -2770,6 +2803,7 @@ install-target:  \
+     maybe-install-target-zlib \
+     maybe-install-target-rda \
+     maybe-install-target-libada \
++    maybe-install-target-libgm2 \
+     maybe-install-target-libgomp \
+     maybe-install-target-libitm \
+     maybe-install-target-libatomic
+@@ -2881,6 +2915,7 @@ install-strip-target:  \
+     maybe-install-strip-target-zlib \
+     maybe-install-strip-target-rda \
+     maybe-install-strip-target-libada \
++    maybe-install-strip-target-libgm2 \
+     maybe-install-strip-target-libgomp \
+     maybe-install-strip-target-libitm \
+     maybe-install-strip-target-libatomic
+@@ -54794,6 +54829,464 @@ maintainer-clean-target-libada:
+ 
+ 
+ 
++.PHONY: configure-target-libgm2 maybe-configure-target-libgm2
++maybe-configure-target-libgm2:
++@if gcc-bootstrap
++configure-target-libgm2: stage_current
++@endif gcc-bootstrap
++@if target-libgm2
++maybe-configure-target-libgm2: configure-target-libgm2
++configure-target-libgm2: 
++	@: $(MAKE); $(unstage)
++	@r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	echo "Checking multilib configuration for libgm2..."; \
++	$(SHELL) $(srcdir)/mkinstalldirs $(TARGET_SUBDIR)/libgm2; \
++	$(CC_FOR_TARGET) --print-multi-lib > $(TARGET_SUBDIR)/libgm2/multilib.tmp 2> /dev/null; \
++	if test -r $(TARGET_SUBDIR)/libgm2/multilib.out; then \
++	  if cmp -s $(TARGET_SUBDIR)/libgm2/multilib.tmp $(TARGET_SUBDIR)/libgm2/multilib.out; then \
++	    rm -f $(TARGET_SUBDIR)/libgm2/multilib.tmp; \
++	  else \
++	    rm -f $(TARGET_SUBDIR)/libgm2/Makefile; \
++	    mv $(TARGET_SUBDIR)/libgm2/multilib.tmp $(TARGET_SUBDIR)/libgm2/multilib.out; \
++	  fi; \
++	else \
++	  mv $(TARGET_SUBDIR)/libgm2/multilib.tmp $(TARGET_SUBDIR)/libgm2/multilib.out; \
++	fi; \
++	test ! -f $(TARGET_SUBDIR)/libgm2/Makefile || exit 0; \
++	$(SHELL) $(srcdir)/mkinstalldirs $(TARGET_SUBDIR)/libgm2; \
++	$(NORMAL_TARGET_EXPORTS)  \
++	echo Configuring in $(TARGET_SUBDIR)/libgm2; \
++	cd "$(TARGET_SUBDIR)/libgm2" || exit 1; \
++	case $(srcdir) in \
++	  /* | [A-Za-z]:[\\/]*) topdir=$(srcdir) ;; \
++	  *) topdir=`echo $(TARGET_SUBDIR)/libgm2/ | \
++		sed -e 's,\./,,g' -e 's,[^/]*/,../,g' `$(srcdir) ;; \
++	esac; \
++	module_srcdir=libgm2; \
++	rm -f no-such-file || : ; \
++	CONFIG_SITE=no-such-file $(SHELL) \
++	  $$s/$$module_srcdir/configure \
++	  --srcdir=$${topdir}/$$module_srcdir \
++	  $(TARGET_CONFIGARGS) --build=${build_alias} --host=${target_alias} \
++	  --target=${target_alias}  \
++	  || exit 1
++@endif target-libgm2
++
++
++
++
++
++.PHONY: all-target-libgm2 maybe-all-target-libgm2
++maybe-all-target-libgm2:
++@if gcc-bootstrap
++all-target-libgm2: stage_current
++@endif gcc-bootstrap
++@if target-libgm2
++TARGET-target-libgm2=all
++maybe-all-target-libgm2: all-target-libgm2
++all-target-libgm2: configure-target-libgm2
++	@: $(MAKE); $(unstage)
++	@r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS)  \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) $(EXTRA_TARGET_FLAGS)   \
++		$(TARGET-target-libgm2))
++@endif target-libgm2
++
++
++
++
++
++.PHONY: check-target-libgm2 maybe-check-target-libgm2
++maybe-check-target-libgm2:
++@if target-libgm2
++maybe-check-target-libgm2: check-target-libgm2
++
++check-target-libgm2:
++	@: $(MAKE); $(unstage)
++	@r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(TARGET_FLAGS_TO_PASS)   check)
++
++@endif target-libgm2
++
++.PHONY: install-target-libgm2 maybe-install-target-libgm2
++maybe-install-target-libgm2:
++@if target-libgm2
++maybe-install-target-libgm2: install-target-libgm2
++
++install-target-libgm2: installdirs
++	@: $(MAKE); $(unstage)
++	@r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(TARGET_FLAGS_TO_PASS)  install)
++
++@endif target-libgm2
++
++.PHONY: install-strip-target-libgm2 maybe-install-strip-target-libgm2
++maybe-install-strip-target-libgm2:
++@if target-libgm2
++maybe-install-strip-target-libgm2: install-strip-target-libgm2
++
++install-strip-target-libgm2: installdirs
++	@: $(MAKE); $(unstage)
++	@r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(TARGET_FLAGS_TO_PASS)  install-strip)
++
++@endif target-libgm2
++
++# Other targets (info, dvi, pdf, etc.)
++
++.PHONY: maybe-info-target-libgm2 info-target-libgm2
++maybe-info-target-libgm2:
++@if target-libgm2
++maybe-info-target-libgm2: info-target-libgm2
++
++info-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing info in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           info) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-dvi-target-libgm2 dvi-target-libgm2
++maybe-dvi-target-libgm2:
++@if target-libgm2
++maybe-dvi-target-libgm2: dvi-target-libgm2
++
++dvi-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing dvi in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           dvi) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-pdf-target-libgm2 pdf-target-libgm2
++maybe-pdf-target-libgm2:
++@if target-libgm2
++maybe-pdf-target-libgm2: pdf-target-libgm2
++
++pdf-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing pdf in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           pdf) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-html-target-libgm2 html-target-libgm2
++maybe-html-target-libgm2:
++@if target-libgm2
++maybe-html-target-libgm2: html-target-libgm2
++
++html-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing html in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           html) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-TAGS-target-libgm2 TAGS-target-libgm2
++maybe-TAGS-target-libgm2:
++@if target-libgm2
++maybe-TAGS-target-libgm2: TAGS-target-libgm2
++
++TAGS-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing TAGS in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           TAGS) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-install-info-target-libgm2 install-info-target-libgm2
++maybe-install-info-target-libgm2:
++@if target-libgm2
++maybe-install-info-target-libgm2: install-info-target-libgm2
++
++install-info-target-libgm2: \
++    configure-target-libgm2 \
++    info-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing install-info in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           install-info) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-install-pdf-target-libgm2 install-pdf-target-libgm2
++maybe-install-pdf-target-libgm2:
++@if target-libgm2
++maybe-install-pdf-target-libgm2: install-pdf-target-libgm2
++
++install-pdf-target-libgm2: \
++    configure-target-libgm2 \
++    pdf-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing install-pdf in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           install-pdf) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-install-html-target-libgm2 install-html-target-libgm2
++maybe-install-html-target-libgm2:
++@if target-libgm2
++maybe-install-html-target-libgm2: install-html-target-libgm2
++
++install-html-target-libgm2: \
++    configure-target-libgm2 \
++    html-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing install-html in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           install-html) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-installcheck-target-libgm2 installcheck-target-libgm2
++maybe-installcheck-target-libgm2:
++@if target-libgm2
++maybe-installcheck-target-libgm2: installcheck-target-libgm2
++
++installcheck-target-libgm2: \
++    configure-target-libgm2 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing installcheck in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           installcheck) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-mostlyclean-target-libgm2 mostlyclean-target-libgm2
++maybe-mostlyclean-target-libgm2:
++@if target-libgm2
++maybe-mostlyclean-target-libgm2: mostlyclean-target-libgm2
++
++mostlyclean-target-libgm2: 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing mostlyclean in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           mostlyclean) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-clean-target-libgm2 clean-target-libgm2
++maybe-clean-target-libgm2:
++@if target-libgm2
++maybe-clean-target-libgm2: clean-target-libgm2
++
++clean-target-libgm2: 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing clean in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           clean) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-distclean-target-libgm2 distclean-target-libgm2
++maybe-distclean-target-libgm2:
++@if target-libgm2
++maybe-distclean-target-libgm2: distclean-target-libgm2
++
++distclean-target-libgm2: 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing distclean in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           distclean) \
++	  || exit 1
++
++@endif target-libgm2
++
++.PHONY: maybe-maintainer-clean-target-libgm2 maintainer-clean-target-libgm2
++maybe-maintainer-clean-target-libgm2:
++@if target-libgm2
++maybe-maintainer-clean-target-libgm2: maintainer-clean-target-libgm2
++
++maintainer-clean-target-libgm2: 
++	@: $(MAKE); $(unstage)
++	@[ -f $(TARGET_SUBDIR)/libgm2/Makefile ] || exit 0; \
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(NORMAL_TARGET_EXPORTS) \
++	echo "Doing maintainer-clean in $(TARGET_SUBDIR)/libgm2"; \
++	for flag in $(EXTRA_TARGET_FLAGS); do \
++	  eval `echo "$$flag" | sed -e "s|^\([^=]*\)=\(.*\)|\1='\2'; export \1|"`; \
++	done; \
++	(cd $(TARGET_SUBDIR)/libgm2 && \
++	  $(MAKE) $(BASE_FLAGS_TO_PASS) "AR=$${AR}" "AS=$${AS}" \
++	          "CC=$${CC}" "CXX=$${CXX}" "LD=$${LD}" "NM=$${NM}" \
++	          "RANLIB=$${RANLIB}" \
++	          "DLLTOOL=$${DLLTOOL}" "WINDRES=$${WINDRES}" "WINDMC=$${WINDMC}" \
++	           maintainer-clean) \
++	  || exit 1
++
++@endif target-libgm2
++
++
++
++
++
+ .PHONY: configure-target-libgomp maybe-configure-target-libgomp
+ maybe-configure-target-libgomp:
+ @if gcc-bootstrap
+@@ -57045,6 +57538,14 @@ check-gcc-go:
+ 	(cd gcc && $(MAKE) $(GCC_FLAGS_TO_PASS) check-go);
+ check-go: check-gcc-go check-target-libgo check-gotools
+ 
++.PHONY: check-gcc-m2 check-m2
++check-gcc-m2:
++	r=`${PWD_COMMAND}`; export r; \
++	s=`cd $(srcdir); ${PWD_COMMAND}`; export s; \
++	$(HOST_EXPORTS) \
++	(cd gcc && $(MAKE) $(GCC_FLAGS_TO_PASS) check-m2);
++check-m2: check-gcc-m2
++
+ .PHONY: check-gcc-brig check-brig
+ check-gcc-brig:
+ 	r=`${PWD_COMMAND}`; export r; \
+@@ -60473,6 +60974,7 @@ configure-target-libffi: stage_last
+ configure-target-zlib: stage_last
+ configure-target-rda: stage_last
+ configure-target-libada: stage_last
++configure-target-libgm2: stage_last
+ configure-stage1-target-libgomp: maybe-all-stage1-gcc
+ configure-stage2-target-libgomp: maybe-all-stage2-gcc
+ configure-stage3-target-libgomp: maybe-all-stage3-gcc
+@@ -60508,6 +61010,7 @@ configure-target-libffi: maybe-all-gcc
+ configure-target-zlib: maybe-all-gcc
+ configure-target-rda: maybe-all-gcc
+ configure-target-libada: maybe-all-gcc
++configure-target-libgm2: maybe-all-gcc
+ configure-target-libgomp: maybe-all-gcc
+ configure-target-libitm: maybe-all-gcc
+ configure-target-libatomic: maybe-all-gcc
+@@ -61803,6 +62306,7 @@ configure-target-libffi: maybe-all-targe
+ configure-target-zlib: maybe-all-target-libgcc
+ configure-target-rda: maybe-all-target-libgcc
+ configure-target-libada: maybe-all-target-libgcc
++configure-target-libgm2: maybe-all-target-libgcc
+ configure-target-libgomp: maybe-all-target-libgcc
+ configure-target-libitm: maybe-all-target-libgcc
+ configure-target-libatomic: maybe-all-target-libgcc
+@@ -61850,6 +62354,8 @@ configure-target-rda: maybe-all-target-n
+ 
+ configure-target-libada: maybe-all-target-newlib maybe-all-target-libgloss
+ 
++configure-target-libgm2: maybe-all-target-newlib maybe-all-target-libgloss
++
+ configure-target-libgomp: maybe-all-target-newlib maybe-all-target-libgloss
+ 
+ configure-target-libitm: maybe-all-target-newlib maybe-all-target-libgloss
+--- a/src/Makefile.tpl
++++ b/src/Makefile.tpl
+@@ -161,6 +161,7 @@ BUILD_EXPORTS = \
+ 	GOCFLAGS="$(GOCFLAGS_FOR_BUILD)"; export GOCFLAGS; \
+ 	GDC="$(GDC_FOR_BUILD)"; export GDC; \
+ 	GDCFLAGS="$(GDCFLAGS_FOR_BUILD)"; export GDCFLAGS; \
++	GM2="$(GM2_FOR_BUILD)"; export GM2; \
+ 	DLLTOOL="$(DLLTOOL_FOR_BUILD)"; export DLLTOOL; \
+ 	LD="$(LD_FOR_BUILD)"; export LD; \
+ 	LDFLAGS="$(LDFLAGS_FOR_BUILD)"; export LDFLAGS; \
+@@ -198,6 +199,7 @@ HOST_EXPORTS = \
+ 	GFORTRAN="$(GFORTRAN)"; export GFORTRAN; \
+ 	GOC="$(GOC)"; export GOC; \
+ 	GDC="$(GDC)"; export GDC; \
++	GM2="$(GM2)"; export GM2; \
+ 	AR="$(AR)"; export AR; \
+ 	AS="$(AS)"; export AS; \
+ 	CC_FOR_BUILD="$(CC_FOR_BUILD)"; export CC_FOR_BUILD; \
+@@ -296,6 +298,7 @@ BASE_TARGET_EXPORTS = \
+ 	GFORTRAN="$(GFORTRAN_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GFORTRAN; \
+ 	GOC="$(GOC_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GOC; \
+ 	GDC="$(GDC_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GDC; \
++	GM2="$(GM2_FOR_TARGET) $(XGCC_FLAGS_FOR_TARGET) $$TFLAGS"; export GM2; \
+ 	DLLTOOL="$(DLLTOOL_FOR_TARGET)"; export DLLTOOL; \
+ 	LD="$(COMPILER_LD_FOR_TARGET)"; export LD; \
+ 	LDFLAGS="$(LDFLAGS_FOR_TARGET)"; export LDFLAGS; \
+@@ -362,6 +365,7 @@ DLLTOOL_FOR_BUILD = @DLLTOOL_FOR_BUILD@
+ GFORTRAN_FOR_BUILD = @GFORTRAN_FOR_BUILD@
+ GOC_FOR_BUILD = @GOC_FOR_BUILD@
+ GDC_FOR_BUILD = @GDC_FOR_BUILD@
++GM2_FOR_BUILD = @GM2_FOR_BUILD@
+ LDFLAGS_FOR_BUILD = @LDFLAGS_FOR_BUILD@
+ LD_FOR_BUILD = @LD_FOR_BUILD@
+ NM_FOR_BUILD = @NM_FOR_BUILD@
+@@ -431,6 +435,7 @@ CXXFLAGS = @CXXFLAGS@
+ LIBCXXFLAGS = $(CXXFLAGS) -fno-implicit-templates
+ GOCFLAGS = $(CFLAGS)
+ GDCFLAGS = $(CFLAGS)
++GM2FLAGS = $(CFLAGS)
+ 
+ CREATE_GCOV = create_gcov
+ 
+@@ -518,6 +523,7 @@ RAW_CXX_FOR_TARGET=$(STAGE_CC_WRAPPER) @
+ GFORTRAN_FOR_TARGET=$(STAGE_CC_WRAPPER) @GFORTRAN_FOR_TARGET@
+ GOC_FOR_TARGET=$(STAGE_CC_WRAPPER) @GOC_FOR_TARGET@
+ GDC_FOR_TARGET=$(STAGE_CC_WRAPPER) @GDC_FOR_TARGET@
++GM2_FOR_TARGET=$(STAGE_CC_WRAPPER) @GM2_FOR_TARGET@
+ DLLTOOL_FOR_TARGET=@DLLTOOL_FOR_TARGET@
+ LD_FOR_TARGET=@LD_FOR_TARGET@
+ 
+@@ -647,6 +653,7 @@ EXTRA_HOST_FLAGS = \
+ 	'GFORTRAN=$(GFORTRAN)' \
+ 	'GOC=$(GOC)' \
+ 	'GDC=$(GDC)' \
++	'GM2=$(GM2)' \
+ 	'LD=$(LD)' \
+ 	'LIPO=$(LIPO)' \
+ 	'NM=$(NM)' \
+@@ -673,6 +680,7 @@ POSTSTAGE1_FLAGS_TO_PASS = \
+ 	CC="$${CC}" CC_FOR_BUILD="$${CC_FOR_BUILD}" \
+ 	CXX="$${CXX}" CXX_FOR_BUILD="$${CXX_FOR_BUILD}" \
+ 	GDC="$${GDC}" GDC_FOR_BUILD="$${GDC_FOR_BUILD}" \
++	GM2="$${GM2}" GM2_FOR_BUILD="$${GM2_FOR_BUILD}" \
+ 	GNATBIND="$${GNATBIND}" \
+ 	LDFLAGS="$${LDFLAGS}" \
+ 	HOST_LIBS="$${HOST_LIBS}" \
+@@ -707,6 +715,8 @@ EXTRA_TARGET_FLAGS = \
+ 	'GOCFLAGS=$$(GOCFLAGS_FOR_TARGET)' \
+ 	'GDC=$$(GDC_FOR_TARGET) $$(XGCC_FLAGS_FOR_TARGET) $$(TFLAGS)' \
+ 	'GDCFLAGS=$$(GDCFLAGS_FOR_TARGET)' \
++	'GM2=$$(GM2_FOR_TARGET) $$(XGCC_FLAGS_FOR_TARGET) $$(TFLAGS)' \
++	'GM2FLAGS=$$(GM2FLAGS_FOR_TARGET)' \
+ 	'LD=$(COMPILER_LD_FOR_TARGET)' \
+ 	'LDFLAGS=$$(LDFLAGS_FOR_TARGET)' \
+ 	'LIBCFLAGS=$$(LIBCFLAGS_FOR_TARGET)' \
+@@ -733,6 +743,7 @@ TARGET_FLAGS_TO_PASS = $(BASE_FLAGS_TO_P
+ # cross-building scheme.
+ EXTRA_GCC_FLAGS = \
+ 	"GCC_FOR_TARGET=$(GCC_FOR_TARGET)" \
++	"GM2_FOR_TARGET=$(GM2_FOR_TARGET)" \
+ 	"`echo 'STMP_FIXPROTO=$(STMP_FIXPROTO)' | sed -e s'/[^=][^=]*=$$/XFOO=/'`" \
+ 	"`echo 'LIMITS_H_TEST=$(LIMITS_H_TEST)' | sed -e s'/[^=][^=]*=$$/XFOO=/'`"
+ 
+--- a/src/gcc/go/gospec.c
++++ b/src/gcc/go/gospec.c
+@@ -464,3 +464,9 @@ int lang_specific_pre_link (void)  /* No
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ int lang_specific_extra_outfiles = 0;  /* Not used for Go.  */
++
++/* lang_register_spec_functions.  Not used for Go.  */
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/fortran/gfortranspec.c
++++ b/src/gcc/fortran/gfortranspec.c
+@@ -447,4 +447,12 @@ lang_specific_pre_link (void)
+ }
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+-int lang_specific_extra_outfiles = 0;	/* Not used for F77.  */
++int lang_specific_extra_outfiles = 0;	/* Not used for Fortran.  */
++
++/* lang_register_spec_functions register the Fortran associated spec
++   functions.  */
++
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/d/d-spec.cc
++++ b/src/gcc/d/d-spec.cc
+@@ -490,3 +490,10 @@ lang_specific_pre_link (void)
+ 
+ int lang_specific_extra_outfiles = 0;  /* Not used for D.  */
+ 
++/* lang_register_spec_functions register the D associated spec
++   functions.  Not used for D.  */
++
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/brig/brigspec.c
++++ b/src/gcc/brig/brigspec.c
+@@ -134,3 +134,11 @@ int lang_specific_pre_link (void) /* Not
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ 
+ int lang_specific_extra_outfiles = 0; /* Not used for Brig.  */
++
++/* lang_register_spec_functions register the Brig associated spec
++   functions.  Not used for Brig.  */
++
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/jit/jit-spec.c
++++ b/src/gcc/jit/jit-spec.c
+@@ -39,3 +39,9 @@ lang_specific_pre_link (void)
+ 
+ /* Number of extra output files that lang_specific_pre_link may generate.  */
+ int lang_specific_extra_outfiles = 0;  /* Not used for jit.  */
++
++/* lang_register_spec_functions.  Not used for jit.  */
++void
++lang_register_spec_functions (void)
++{
++}
+--- a/src/gcc/analyzer/sm-malloc.cc
++++ b/src/gcc/analyzer/sm-malloc.cc
+@@ -22,6 +22,8 @@ along with GCC; see the file COPYING3.
+ #include "system.h"
+ #include "coretypes.h"
+ #include "tree.h"
++#include "langhooks-def.h"
++#include "langhooks.h"
+ #include "function.h"
+ #include "basic-block.h"
+ #include "gimple.h"
+@@ -45,6 +47,7 @@ along with GCC; see the file COPYING3.
+ #include "stringpool.h"
+ #include "attribs.h"
+ #include "analyzer/function-set.h"
++#include "print-tree.h"
+ 
+ #if ENABLE_ANALYZER
+ 
+@@ -388,8 +391,14 @@ public:
+   static bool unaffected_by_call_p (tree fndecl);
+ 
+   standard_deallocator_set m_free;
+-  standard_deallocator_set m_scalar_delete;
+-  standard_deallocator_set m_vector_delete;
++
++  /* C++ scalar delete and vector delete[].  */
++  standard_deallocator_set m_cp_scalar_delete;
++  standard_deallocator_set m_cp_vector_delete;
++
++  /* Modula 2 user and system heaps.  */
++  standard_deallocator_set m_m2_storage_deallocate;
++  standard_deallocator_set m_m2_sysstorage_deallocate;
+ 
+   standard_deallocator m_realloc;
+ 
+@@ -422,13 +431,18 @@ private:
+ 			    const supernode *node,
+ 			    const gcall *call,
+ 			    const deallocator *d,
+-			    unsigned argno) const;
++			     unsigned argno,
++			     bool pass_by_reference = false) const;
+   void on_realloc_call (sm_context *sm_ctxt,
+ 			const supernode *node,
+ 			const gcall *call) const;
+   void on_zero_assignment (sm_context *sm_ctxt,
+ 			   const gimple *stmt,
+ 			   tree lhs) const;
++  void on_allocator_call_pass_by_ref (sm_context *sm_ctxt,
++				      const gcall *call,
++				      const deallocator_set
++				      *deallocators) const;
+ 
+   /* A map for consolidating deallocators so that they are
+      unique per deallocator FUNCTION_DECL.  */
+@@ -1371,8 +1385,12 @@ allocation_state::get_nonnull () const
+ malloc_state_machine::malloc_state_machine (logger *logger)
+ : state_machine ("malloc", logger),
+   m_free (this, "free", WORDING_FREED),
+-  m_scalar_delete (this, "delete", WORDING_DELETED),
+-  m_vector_delete (this, "delete[]", WORDING_DELETED),
++  m_cp_scalar_delete (this, "delete", WORDING_DELETED),
++  m_cp_vector_delete (this, "delete[]", WORDING_DELETED),
++  m_m2_storage_deallocate (this, "DISPOSE via Storage.DEALLOCATE",
++			   WORDING_DEALLOCATED),
++  m_m2_sysstorage_deallocate (this, "DISPOSE via SysStorage.DEALLOCATE",
++			      WORDING_DEALLOCATED),
+   m_realloc (this, "realloc", WORDING_REALLOCATED)
+ {
+   gcc_assert (m_start->get_id () == 0);
+@@ -1529,21 +1547,36 @@ malloc_state_machine::on_stmt (sm_contex
+ 	    return true;
+ 	  }
+ 
++	if (lang_hooks.new_dispose_storage_substitution ())
++	  {
++	    /* m2 allocation.  */
++	    if (is_named_call_p (callee_fndecl, "Storage_ALLOCATE", call, 2))
++	      {
++		on_allocator_call_pass_by_ref (sm_ctxt, call, &m_m2_storage_deallocate);
++		return true;
++	      }
++	    else if (is_named_call_p (callee_fndecl, "SysStorage_ALLOCATE", call, 2))
++	      {
++		on_allocator_call_pass_by_ref (sm_ctxt, call, &m_m2_sysstorage_deallocate);
++		return true;
++	      }
++	  }
++
+ 	if (is_named_call_p (callee_fndecl, "operator new", call, 1))
+-	  on_allocator_call (sm_ctxt, call, &m_scalar_delete);
++	  on_allocator_call (sm_ctxt, call, &m_cp_scalar_delete);
+ 	else if (is_named_call_p (callee_fndecl, "operator new []", call, 1))
+-	  on_allocator_call (sm_ctxt, call, &m_vector_delete);
++	  on_allocator_call (sm_ctxt, call, &m_cp_vector_delete);
+ 	else if (is_named_call_p (callee_fndecl, "operator delete", call, 1)
+ 		 || is_named_call_p (callee_fndecl, "operator delete", call, 2))
+ 	  {
+ 	    on_deallocator_call (sm_ctxt, node, call,
+-				 &m_scalar_delete.m_deallocator, 0);
++				 &m_cp_scalar_delete.m_deallocator, 0);
+ 	    return true;
+ 	  }
+ 	else if (is_named_call_p (callee_fndecl, "operator delete []", call, 1))
+ 	  {
+ 	    on_deallocator_call (sm_ctxt, node, call,
+-				 &m_vector_delete.m_deallocator, 0);
++				 &m_cp_vector_delete.m_deallocator, 0);
+ 	    return true;
+ 	  }
+ 
+@@ -1565,6 +1598,23 @@ malloc_state_machine::on_stmt (sm_contex
+ 	    return true;
+ 	  }
+ 
++	if (lang_hooks.new_dispose_storage_substitution ())
++	  {
++	    /* m2 deallocation.	*/
++	    if (is_named_call_p (callee_fndecl, "Storage_DEALLOCATE", call, 2))
++	      {
++		on_deallocator_call (sm_ctxt, node, call,
++				     &m_m2_storage_deallocate.m_deallocator, 0, true);
++		return true;
++	      }
++	    else if (is_named_call_p (callee_fndecl, "SysStorage_DEALLOCATE", call, 2))
++	      {
++		on_deallocator_call (sm_ctxt, node, call,
++				     &m_m2_sysstorage_deallocate.m_deallocator, 0, true);
++		return true;
++	      }
++	  }
++
+ 	if (is_named_call_p (callee_fndecl, "realloc", call, 2)
+ 	    || is_named_call_p (callee_fndecl, "__builtin_realloc", call, 2))
+ 	  {
+@@ -1737,16 +1787,71 @@ malloc_state_machine::on_allocator_call
+     }
+ }
+ 
++/* Skips an ADDR_EXPR if seen.	 */
++
++static
++tree
++skip_reference (tree arg)
++{
++  if (TREE_CODE (arg) == ADDR_EXPR)
++      return TREE_OPERAND (arg, 0);
++  return NULL;
++}
++
++
++/* Handle allocators which return the value through a pass by reference parameter.  */
++
++void
++malloc_state_machine::on_allocator_call_pass_by_ref (sm_context *sm_ctxt,
++						     const gcall *call,
++						     const deallocator_set
++						     *deallocators) const
++{
++  if (gimple_call_num_args (call) == 0)
++    return;
++  tree arg = gimple_call_arg (call, 0);
++  if (arg)
++    {
++      /* in Modula-2 the heap allocator API is: ALLOCATE (VAR ADDRESS;
++	  CARDINAL).  So we need to skip the reference or pointer in
++	  the first parameter.	*/
++      tree diag_arg_lvalue = sm_ctxt->get_diagnostic_tree (arg);
++      tree diag_arg_rvalue = skip_reference (diag_arg_lvalue);
++      if ((diag_arg_rvalue != NULL)
++	  && (sm_ctxt->get_state (call, diag_arg_rvalue) == m_start))
++	sm_ctxt->set_next_state (call, diag_arg_rvalue,
++				 deallocators->m_unchecked);
++    }
++}
++
+ void
+ malloc_state_machine::on_deallocator_call (sm_context *sm_ctxt,
+ 					   const supernode *node,
+ 					   const gcall *call,
+ 					   const deallocator *d,
+-					   unsigned argno) const
++					   unsigned argno,
++					   bool pass_by_reference) const
+ {
+   if (argno >= gimple_call_num_args (call))
+     return;
+   tree arg = gimple_call_arg (call, argno);
++  if (pass_by_reference)
++    {
++      tree diag_arg = sm_ctxt->get_diagnostic_tree (arg);
++      /* in Modula-2 the API is: DEALLOCATE (VAR a: ADDRESS; size:
++	  CARDINAL).  So we need to skip the pointer or reference in
++	  the first parameter.	We also know the pointer is assigned to
++	  NULL.	 In C this could be described as:
++
++	  DEALLOCATE (void **address, unsigned int size)
++	  {
++	     free (*address);
++	     *address = NULL;
++	  }.  */
++      arg = skip_reference (diag_arg);
++      if (arg == NULL)
++	return;
++    }
+ 
+   state_t state = sm_ctxt->get_state (call, arg);
+ 
+@@ -1789,6 +1894,9 @@ malloc_state_machine::on_deallocator_cal
+ 					   d->m_name));
+       sm_ctxt->set_next_state (call, arg, m_stop);
+     }
++  /* in Modula-2 the DEALLOCATE assigns the pointer to NULL.  However
++     we don't do this in the analyzer as it ignores NULL pointers
++     during deallocation.  */
+ }
+ 
+ /* Implementation of realloc(3):
+--- a/src/gcc/langhooks.h
++++ b/src/gcc/langhooks.h
+@@ -611,6 +611,9 @@ struct lang_hooks
+   /* Invoked before the early_finish debug hook is invoked.  */
+   void (*finalize_early_debug) (void);
+ 
++  /* Does the language substitute NEW into ALLOCATE and DISPOSE into DEALLOCATE?  */
++  bool (*new_dispose_storage_substitution) (void);
++
+   /* Whenever you add entries here, make sure you adjust langhooks-def.h
+      and langhooks.c accordingly.  */
+ };
+--- a/src/gcc/langhooks-def.h
++++ b/src/gcc/langhooks-def.h
+@@ -95,6 +95,7 @@ extern const char *lhd_get_substring_loc
+ extern int lhd_decl_dwarf_attribute (const_tree, int);
+ extern int lhd_type_dwarf_attribute (const_tree, int);
+ extern void lhd_finalize_early_debug (void);
++extern bool lhd_new_dispose_storage_substitution (void);
+ 
+ #define LANG_HOOKS_NAME			"GNU unknown"
+ #define LANG_HOOKS_IDENTIFIER_SIZE	sizeof (struct lang_identifier)
+@@ -147,6 +148,7 @@ extern void lhd_finalize_early_debug (vo
+ #define LANG_HOOKS_RUN_LANG_SELFTESTS   lhd_do_nothing
+ #define LANG_HOOKS_GET_SUBSTRING_LOCATION lhd_get_substring_location
+ #define LANG_HOOKS_FINALIZE_EARLY_DEBUG lhd_finalize_early_debug
++#define LANG_HOOKS_NEW_DISPOSE_STORAGE_SUBSTITUTION lhd_new_dispose_storage_substitution
+ 
+ /* Attribute hooks.  */
+ #define LANG_HOOKS_ATTRIBUTE_TABLE		NULL
+@@ -381,7 +383,8 @@ extern void lhd_end_section (void);
+   LANG_HOOKS_EMITS_BEGIN_STMT, \
+   LANG_HOOKS_RUN_LANG_SELFTESTS, \
+   LANG_HOOKS_GET_SUBSTRING_LOCATION, \
+-  LANG_HOOKS_FINALIZE_EARLY_DEBUG \
++  LANG_HOOKS_FINALIZE_EARLY_DEBUG, \
++  LANG_HOOKS_NEW_DISPOSE_STORAGE_SUBSTITUTION \
+ }
+ 
+ #endif /* GCC_LANG_HOOKS_DEF_H */
+--- a/src/gcc/langhooks.c
++++ b/src/gcc/langhooks.c
+@@ -896,6 +896,13 @@ lhd_finalize_early_debug (void)
+     (*debug_hooks->early_global_decl) (cnode->decl);
+ }
+ 
++/* Should the analyzer check for NEW/DISPOSE Storage_ALLOCATE/Storage_DEALLOCATE?  */
++
++bool lhd_new_dispose_storage_substitution (void)
++{
++  return false;
++}
++
+ /* Returns true if the current lang_hooks represents the GNU C frontend.  */
+ 
+ bool
+--- a/src/gcc/analyzer/sm.cc
++++ b/src/gcc/analyzer/sm.cc
+@@ -159,6 +159,7 @@ make_checkers (auto_delete_vec <state_ma
+     out.safe_push (make_taint_state_machine (logger));
+   out.safe_push (make_sensitive_state_machine (logger));
+   out.safe_push (make_signal_state_machine (logger));
++  out.safe_push (make_m2rts_state_machine (logger));
+ 
+   /* We only attempt to run the pattern tests if it might have been manually
+      enabled (for DejaGnu purposes).  */
+--- a/src/gcc/analyzer/sm.h
++++ b/src/gcc/analyzer/sm.h
+@@ -248,6 +248,7 @@ protected:
+ extern void make_checkers (auto_delete_vec <state_machine> &out,
+ 			   logger *logger);
+ 
++extern state_machine *make_m2rts_state_machine (logger *logger);
+ extern state_machine *make_malloc_state_machine (logger *logger);
+ extern state_machine *make_fileptr_state_machine (logger *logger);
+ extern state_machine *make_taint_state_machine (logger *logger);
+--- /dev/null
++++ b/src/gcc/analyzer/sm-m2rts.cc
+@@ -0,0 +1,476 @@
++/* An experimental state machine, for tracking bad calls from within
++   signal handlers.
++
++   Copyright (C) 2021 Free Software Foundation, Inc.
++   Contributed by Gaius Mulley <gaius.mulley@southwales.ac.uk>
++   heavily derived from work written by
++   David Malcolm <dmalcolm@redhat.com>.
++
++This file is part of GCC.
++
++GCC is free software; you can redistribute it and/or modify it
++under the terms of the GNU General Public License as published by
++the Free Software Foundation; either version 3, or (at your option)
++any later version.
++
++GCC is distributed in the hope that it will be useful, but
++WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with GCC; see the file COPYING3.  If not see
++<http://www.gnu.org/licenses/>.  */
++
++#include "config.h"
++#include "system.h"
++#include "coretypes.h"
++#include "tree.h"
++#include "function.h"
++#include "basic-block.h"
++#include "gimple.h"
++#include "options.h"
++#include "bitmap.h"
++#include "diagnostic-path.h"
++#include "diagnostic-metadata.h"
++#include "function.h"
++#include "json.h"
++#include "analyzer/analyzer.h"
++#include "diagnostic-event-id.h"
++#include "analyzer/analyzer-logging.h"
++#include "analyzer/sm.h"
++#include "analyzer/pending-diagnostic.h"
++#include "sbitmap.h"
++#include "tristate.h"
++#include "ordered-hash-map.h"
++#include "selftest.h"
++#include "analyzer/call-string.h"
++#include "analyzer/program-point.h"
++#include "analyzer/store.h"
++#include "analyzer/region-model.h"
++#include "analyzer/program-state.h"
++#include "analyzer/checker-path.h"
++#include "digraph.h"
++#include "cfg.h"
++#include "gimple-iterator.h"
++#include "cgraph.h"
++#include "analyzer/supergraph.h"
++#include "alloc-pool.h"
++#include "fibonacci_heap.h"
++#include "analyzer/diagnostic-manager.h"
++#include "shortest-paths.h"
++#include "analyzer/exploded-graph.h"
++#include "analyzer/function-set.h"
++#include "analyzer/analyzer-selftests.h"
++#include "print-tree.h"
++#include "gimple-iterator.h"
++#include "gimple-walk.h"
++#include "analyzer/call-string.h"
++#include "analyzer/program-point.h"
++#include "analyzer/store.h"
++#include "analyzer/region-model.h"
++#include "analyzer/program-state.h"
++#include "analyzer/checker-path.h"
++#include "gimple-iterator.h"
++#include "analyzer/supergraph.h"
++#include "analyzer/pending-diagnostic.h"
++#include "analyzer/diagnostic-manager.h"
++#include "analyzer/constraint-manager.h"
++#include "analyzer/diagnostic-manager.h"
++#include "analyzer/checker-path.h"
++#include "analyzer/exploded-graph.h"
++
++/* The Modula-2 front end will place calls to NoReturnException
++   calls at the end of every procedure function (if -fsoft-check-all)
++   is present.  The analyzer is run after enough optimization has been
++   done to remove any unreachable blocks - hence detecting the presense
++   of a remaining NoReturnException is a valid concern.  */
++
++/* This analyzer module effectively provides the stubs so that the following
++   algorithm is run:
++
++   for each function call; res = f (); do
++       check function f and see if NoReturnException is called.
++       if f calls NoReturnException
++         warn that f may return an indeterminant result.
++         warn that the lhs of the caller (res) will be indeterminant
++         when the call f completes.  */
++
++#if ENABLE_ANALYZER
++
++namespace ana {
++
++namespace {
++
++/* An experimental state machine, for tracking calls to M2RTS NoReturn
++   handlers from within procedures.  */
++
++class m2rts_state_machine : public state_machine
++{
++public:
++  m2rts_state_machine (logger *logger);
++
++  bool inherited_state_p () const FINAL OVERRIDE { return false; }
++
++  bool on_stmt (sm_context *sm_ctxt,
++		const supernode *node,
++		const gimple *stmt) const FINAL OVERRIDE;
++
++  void on_condition (sm_context *sm_ctxt,
++		     const supernode *node,
++		     const gimple *stmt,
++		     tree lhs,
++		     enum tree_code op,
++		     tree rhs) const FINAL OVERRIDE;
++
++  bool can_purge_p (state_t s) const FINAL OVERRIDE;
++
++#if 0
++  const gcall *last_call;
++  const gcall *current_call;
++#endif
++
++  /* These states are "global", rather than per-expression.  */
++
++  /* State for when we're exploring a function for a no return exception.  */
++  state_t m_in_function;
++
++  /* Stop state.  */
++  state_t m_stop;
++};
++
++/* Concrete subclass for describing call to a m2 procedure
++   from an unconditional statement.  */
++
++class m2_procedure_call
++  : public pending_diagnostic_subclass<m2_procedure_call>
++{
++public:
++  m2_procedure_call (const m2rts_state_machine &sm,
++			tree lhs,
++			const gcall *last_call,
++			const gcall *current_call)
++    : m_sm (sm),
++      m_lhs (lhs),
++      m_last_call (last_call),
++      m_current_call (current_call)
++  {
++  }
++
++  const char *get_kind () const FINAL OVERRIDE
++  {
++    return "call to the procedure function may not return a result";
++  }
++
++  bool operator== (const m2_procedure_call &other) const
++  {
++    return m_current_call == other.m_current_call;
++  }
++
++  bool emit (rich_location *rich_loc) FINAL OVERRIDE
++  {
++    auto_diagnostic_group d;
++    diagnostic_metadata m;
++
++    tree last_call = gimple_call_fndecl (m_last_call);
++    if (warning_meta (rich_loc, m,
++		      OPT_fanalyzer,
++		      "call to the procedure function %qE may not return a result"
++		      " and therefore the value of %qD maybe indeterminate",
++		      last_call, m_lhs))
++      return true;
++    return false;
++  }
++
++  label_text describe_final_event (const evdesc::final_event &ev) FINAL OVERRIDE
++  {
++    tree last_call = gimple_call_fndecl (m_last_call);
++    return ev.formatted_print ("the procedure function might return an indeterminate value"
++			       " (procedure function %qD is missing a return statement)",
++			       last_call);
++  }
++
++  const m2rts_state_machine &m_sm;
++
++private:
++  tree m_lhs;
++  const gcall *m_last_call;
++  const gcall *m_current_call;
++};
++
++/* m2rts_state_machine's ctor.  */
++
++m2rts_state_machine::m2rts_state_machine (logger *logger)
++: state_machine ("m2rts", logger)
++{
++  m_in_function = add_state ("in_function");
++  m_stop = add_state ("stop");
++#if 0
++  last_call = NULL;
++  current_call = NULL;
++#endif
++}
++
++/* Custom exploded_edge info: entry into a m2rts-handler.  */
++
++class m2rts_delivery_edge_info_t : public exploded_edge::custom_info_t
++{
++public:
++  void print (pretty_printer *pp) FINAL OVERRIDE
++  {
++    pp_string (pp, "m2rts delivered");
++  }
++
++  json::object *to_json () const
++  {
++    json::object *custom_obj = new json::object ();
++    return custom_obj;
++  }
++
++  void update_model (region_model *model,
++		     const exploded_edge &eedge) FINAL OVERRIDE
++  {
++#if 0
++    fprintf (stderr, "depth of stack here is: %d\n",
++	     eedge.m_dest->get_stack_depth ());
++    function *f = eedge.m_dest->get_function ();
++    fprintf (stderr, "  eedge.m_dest: \n");
++    debug_tree (f->decl);
++    f = eedge.m_src->get_function ();
++    fprintf (stderr, "  eedge.m_src: \n");
++    debug_tree (f->decl);
++    const gimple *g = eedge.m_src->get_stmt ();
++    fprintf (stderr, "  eedge.m_src.lhs: \n");
++    debug_tree (gimple_get_lhs (g));
++#endif
++#if 0
++    update_model_for_m2rts_handler (model, eedge.m_src->get_function ());
++#endif
++    model->push_frame (eedge.m_src->get_function (), NULL, NULL);
++  }
++
++  void add_events_to_path (checker_path *emission_path,
++			   const exploded_edge &eedge)
++    FINAL OVERRIDE
++  {
++#if 0
++    fprintf (stderr, "add_events_to_path: depth of stack here is: %d\n",
++	     eedge.m_dest->get_stack_depth ());
++    function *f = eedge.m_dest->get_function ();
++    fprintf (stderr, "  add_events_to_path: eedge.m_dest: \n");
++    debug_tree (f->decl);
++#endif
++    function *f = eedge.m_src->get_function ();
++#if 0
++    fprintf (stderr, "  add_events_to_path: eedge.m_src: \n");
++    debug_tree (f->decl);
++#endif
++    tree fndecl = f->decl;
++    const gimple *g = eedge.m_src->get_stmt ();
++#if 0
++    fprintf (stderr, "  add_events_to_path: eedge.m_src.lhs: \n");
++    debug_tree (gimple_get_lhs (g));
++#endif
++    tree lhs = gimple_get_lhs (g);
++    if (lhs)
++      emission_path->add_event
++	(new custom_event (g->location, fndecl, eedge.m_dest->get_stack_depth (),
++			   "later on,"
++			   " when the indeterminate value is returned"));
++  }
++};
++
++/* Concrete subclass of custom_transition for modeling registration of a
++   m2rts handler and the m2rts handler later being called.  */
++
++class m2_procedure_function : public custom_transition
++{
++public:
++  m2_procedure_function (const m2rts_state_machine &sm,
++			  tree fndecl, tree lhs)
++  : m_sm (sm), m_fndecl (fndecl), m_lhs (lhs) {}
++
++  /* Model a signal-handler FNDECL being called at some later point
++     by injecting an edge to a new function-entry node with an empty
++     callstring, setting the 'in-signal-handler' global state
++     on the node.  */
++  void impl_transition (exploded_graph *eg,
++			exploded_node *src_enode,
++			int sm_idx) FINAL OVERRIDE
++  {
++    function *handler_fun = DECL_STRUCT_FUNCTION (m_fndecl);
++    if (!handler_fun)
++      return;
++
++    program_point entering_handler
++      = program_point::from_function_entry (eg->get_supergraph (),
++					    handler_fun);
++
++    program_state state_entering_handler (eg->get_ext_state ());
++    state_entering_handler.m_checker_states[sm_idx]->set_global_state
++      (m_sm.m_in_function);
++
++    state_entering_handler.m_region_model->push_frame (handler_fun, NULL, NULL);
++
++    exploded_node *dst_enode = eg->get_or_create_node (entering_handler,
++						       state_entering_handler,
++						       src_enode);
++    if (dst_enode)
++      eg->add_edge (src_enode, dst_enode, NULL, /*state_change (),*/
++		    new m2rts_delivery_edge_info_t ());
++  }
++
++  const m2rts_state_machine &m_sm;
++  tree m_fndecl;
++  tree m_lhs;
++};
++
++/* Get a set of m2rts exception functions which must be conditionally called.  */
++
++static function_set
++get_m2rts_exception_fns ()
++{
++  // TODO: populate this list more fully
++  static const char * const m2rts_exception_fns[] = {
++    /* This array must be kept sorted.  */
++    "M2RTS_NoReturnException",
++  };
++  const size_t count
++    = sizeof (m2rts_exception_fns) / sizeof (m2rts_exception_fns[0]);
++  function_set fs (m2rts_exception_fns, count);
++  return fs;
++}
++
++/*     "M2RTS_PointerNilException",
++    "M2RTS_ReturnException",
++    "M2RTS_AssignmentException"  */
++
++
++/* Return true if FNDECL is known to be a m2rts exception handler.  */
++
++static bool
++m2rts_exception_p (tree fndecl)
++{
++  function_set fs = get_m2rts_exception_fns ();
++  return fs.contains_decl_p (fndecl);
++}
++
++#if 1
++static const gcall *last_call;
++static const gcall *current_call;
++
++void
++update_procedure_function (const gcall *call)
++{
++  last_call = current_call;
++  current_call = call;
++}
++#endif
++
++
++/* Implementation of state_machine::on_stmt vfunc for m2rts_state_machine.  */
++
++bool
++m2rts_state_machine::on_stmt (sm_context *sm_ctxt,
++			      const supernode *node,
++			      const gimple *stmt) const
++{
++  const state_t global_state = sm_ctxt->get_global_state ();
++  if (global_state == m_start)
++    {
++      if (const gcall *call = dyn_cast <const gcall *> (stmt))
++	{
++	  tree fndecl = gimple_call_fndecl (call);
++	  if (fndecl != NULL)
++	    {
++	      if (m2rts_exception_p (fndecl))
++		// ignore lack of return statements from the start state.
++		return false;
++	      if (tree lhs = gimple_get_lhs (call))
++		{
++		  m2_procedure_function m2pf (*this, fndecl, lhs);
++#if 1
++		  update_procedure_function (call);
++#endif
++		  sm_ctxt->on_custom_transition (&m2pf);
++		}
++	    }
++	}
++    }
++  else if (global_state == m_in_function)
++    {
++      if (const gcall *call = dyn_cast <const gcall *> (stmt))
++	if (tree callee_fndecl = sm_ctxt->get_fndecl_for_call (call))
++	  {
++	    if (m2rts_exception_p (callee_fndecl))
++	      {
++		const gcall *call_noreturn = node->get_final_call ();
++		tree lhs = gimple_get_lhs (current_call);
++		if (lhs != NULL)
++		  {
++		    tree diag_lhs = sm_ctxt->get_diagnostic_tree (lhs);
++		    pending_diagnostic *pd
++		      = new m2_procedure_call (*this,
++					       diag_lhs, current_call,
++					       call_noreturn);
++		    sm_ctxt->warn (node, current_call, lhs, pd);
++		    return true;
++		  }
++	      }
++	  }
++    }
++
++  return false;
++}
++
++/* Implementation of state_machine::on_condition vfunc for
++   m2rts_state_machine.  */
++
++void
++m2rts_state_machine::on_condition (sm_context *sm_ctxt ATTRIBUTE_UNUSED,
++				   const supernode *node ATTRIBUTE_UNUSED,
++				   const gimple *stmt ATTRIBUTE_UNUSED,
++				   tree lhs ATTRIBUTE_UNUSED,
++				   enum tree_code op ATTRIBUTE_UNUSED,
++				   tree rhs ATTRIBUTE_UNUSED) const
++{
++  // Empty
++}
++
++bool
++m2rts_state_machine::can_purge_p (state_t s ATTRIBUTE_UNUSED) const
++{
++  return true;
++}
++
++} // anonymous namespace
++
++/* Internal interface to this file. */
++
++state_machine *
++make_m2rts_state_machine (logger *logger)
++{
++  return new m2rts_state_machine (logger);
++}
++
++#if CHECKING_P
++
++namespace selftest {
++
++/* Run all of the selftests within this file.  */
++
++void
++analyzer_sm_m2rts_cc_tests ()
++{
++  function_set fs = get_m2rts_exception_fns ();
++  fs.assert_sorted ();
++  fs.assert_sane ();
++}
++
++} // namespace selftest
++
++#endif /* CHECKING_P */
++
++} // namespace ana
++
++#endif /* #if ENABLE_ANALYZER */
+--- a/src/gcc/Makefile.in
++++ b/src/gcc/Makefile.in
+@@ -1266,6 +1266,7 @@ ANALYZER_OBJS = \
+ 	analyzer/region-model-reachability.o \
+ 	analyzer/sm.o \
+ 	analyzer/sm-file.o \
++	analyzer/sm-m2rts.o \
+ 	analyzer/sm-malloc.o \
+ 	analyzer/sm-pattern-test.o \
+ 	analyzer/sm-sensitive.o \
+@@ -2708,7 +2709,7 @@ ALL_GTFILES_H := $(sort $(GTFILES_H) $(G
+ $(ALL_GTFILES_H) gtype-desc.c gtype-desc.h gtype.state: s-gtype ; @true
+ 
+ ### Common flags to gengtype [e.g. -v or -B backupdir]
+-GENGTYPE_FLAGS= 
++GENGTYPE_FLAGS=
+ 
+ gtyp-input.list: s-gtyp-input ; @true
+ s-gtyp-input: Makefile

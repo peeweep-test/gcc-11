@@ -1,0 +1,65 @@
+# DP: ARM: pass architecture extensions to assembler if supported.
+
+--- a/src/gcc/common/config/arm/arm-common.c
++++ b/src/gcc/common/config/arm/arm-common.c
+@@ -115,7 +115,12 @@ const char *
+ arm_rewrite_mcpu (int argc, const char **argv)
+ {
+   gcc_assert (argc);
++
++#ifdef HAVE_GAS_ARM_EXTENDED_ARCH
++  return argv[argc - 1];
++#else
+   return arm_rewrite_selected_cpu (argv[argc - 1]);
++#endif
+ }
+ 
+ /* Comparator for arm_rewrite_selected_arch.  Compare the two arch extension
+@@ -223,7 +228,12 @@ const char *
+ arm_rewrite_march (int argc, const char **argv)
+ {
+   gcc_assert (argc);
++
++#ifdef HAVE_GAS_ARM_EXTENDED_ARCH
++  return argv[argc - 1];
++#else
+   return arm_rewrite_selected_arch (argv[argc - 1]);
++#endif
+ }
+ 
+ #include "arm-cpu-cdata.h"
+--- a/src/gcc/config.in
++++ b/src/gcc/config.in
+@@ -1312,6 +1312,13 @@
+ #endif
+ 
+ 
++/* Define if your Arm assembler permits context-specific feature extensions.
++   */
++#ifndef USED_FOR_TARGET
++#undef HAVE_GAS_ARM_EXTENDED_ARCH
++#endif
++
++
+ /* Define if your assembler supports .balign and .p2align. */
+ #ifndef USED_FOR_TARGET
+ #undef HAVE_GAS_BALIGN_AND_P2ALIGN
+--- a/src/gcc/configure.ac
++++ b/src/gcc/configure.ac
+@@ -5358,6 +5358,16 @@ case "$cpu_type" in
+   mmix)
+     insn="swym 0"
+     ;;
++  arm*)
++    gcc_GAS_CHECK_FEATURE([assembler for arm accepts context-specific architecture extensions],
++      gcc_cv_as_arm_option_extensions,
++      [-march=armv8.1-m.main+mve],
++      [.text
++	.thumb
++	.syntax unified
++	vmov.f32 s0, s1],,
++      [AC_DEFINE(HAVE_GAS_ARM_EXTENDED_ARCH, 1,
++       [Define if your Arm assembler permits context-specific feature extensions.])])
+ esac
+ if test x"$insn" != x; then
+  conftest_s="\

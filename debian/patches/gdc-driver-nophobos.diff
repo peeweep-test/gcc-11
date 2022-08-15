@@ -1,0 +1,13 @@
+# DP: Modify gdc driver to have no libphobos by default.
+
+--- a/src/gcc/d/d-lang.cc
++++ b/src/gcc/d/d-lang.cc
+@@ -291,7 +291,7 @@ d_init_options (unsigned int, cl_decoded
+   global.params.useInline = false;
+   global.params.obj = true;
+   global.params.hdrStripPlainFunctions = true;
+-  global.params.betterC = false;
++  global.params.betterC = true;
+   global.params.allInst = false;
+ 
+   /* Default extern(C++) mangling to C++14.  */
